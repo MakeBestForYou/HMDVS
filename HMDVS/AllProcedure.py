@@ -132,7 +132,7 @@ def Preprocess(sta_net):
 #        trace.plot(title = trace.id + 'origin data')
         if trace.stats.npts < 3600.0 * trace.stats.sampling_rate:
             continue
-
+        trace = RemoveRap(trace)
         trace = trace.detrend(type='constant')   # de mean value
         trace = trace.detrend(type='linear')   # de trend      
 #        trace.plot(title = trace.id + ' after demean and detrend')
@@ -142,18 +142,21 @@ def Preprocess(sta_net):
 #            trace.plot(title = trace.id + ' after remove instrument response')
         
         if np.abs(trace.stats.sampling_rate - samplate_rate) > 0.01:
-            trace.resample(samplate_rate)
+            try:
+                trace.decimate(round(trace.stats.sampling_rate/samplate_rate),no_filter=True)
+            except:
+                trace.resample(samplate_rate)
 #            trace.plot(title = trace.id + ' after resample')                
         trace.data = filter.bandpass(trace.data,1.0/period_max,1.0/period_min,trace.stats.sampling_rate,corners = 2, zerophase=True)
 #        trace.plot(title = trace.id + ' after badpass for ' + str(1.0/period_max) + '~' + str(1.0/period_min))
         trace = RemoveRap(trace)
 #        trace.plot(title = trace.id + ' after RemoveRap')        
         trace = SpecWhiten(trace)
-#        trace.plot(title = trace.id + ' after SpecWhiten')   
-        trace = TemporalNormalization(trace)
-#        trace.plot(title = trace.id + ' after Temporal Normalization')      
+#        trace.plot(title = trace.id + ' after SpecWhiten')
         trace = RemoveRap(trace)
 #        trace.plot(title = trace.id + ' after RemoveRap again')
+        trace = TemporalNormalization(trace)
+#        trace.plot(title = trace.id + ' after Temporal Normalization')      
         
         stream[0] = trace
         print(save_file)
@@ -292,8 +295,8 @@ def Crosscorrelation(sta_pair):
                     continue
                 for ii in range(len(data1_data2[0])):
                     if np.size(data1_data2[0],0) == 1:
-                        data1 = data1_data2[0][:]
-                        data2 = data1_data2[1][:]
+                        data1 = data1_data2[0][0]
+                        data2 = data1_data2[1][0]
                     else:
                         data1 = data1_data2[0][ii,:]
                         data2 = data1_data2[1][ii,:]
@@ -323,7 +326,7 @@ def Crosscorrelation(sta_pair):
 #                        t_cf = np.real(np.fft.ifft(f_cf))
                     else:
                         t_cf = correlate(data1,data2, maxShift, demean=True, normalize=True, domain=domain)
-                        
+                    
                     if sum(np.isnan(t_cf)) == 0:
                         t_cf = t_cf/max(abs(t_cf))
                         if ncf == 0:
@@ -336,7 +339,7 @@ def Crosscorrelation(sta_pair):
                 if ncf > 0:
                     ndaycf = ndaycf + 1
                     print(day,ndaycf)
-                if ndaycf>100:
+                if ndaycf > maxStackDay:
                     break
             if ndaycf > 0:
                 stack_t_cf = stack_t_cf/max(abs(stack_t_cf.T))
@@ -494,40 +497,36 @@ def moving_average(interval, window_size):
     window = np.ones(int(window_size)) / float(window_size)
     return np.convolve(interval, window, 'same')
 
-def DenoiseFreqData(distance, freq, FFtData_real, FFtData_imag):
-    num = np.size(FFtData_real,0)
-    size = np.size(FFtData_real,1)
+def DenoiseFreqData(distance, freq, FFtData):
+    num = np.size(FFtData,0)
+    size = np.size(FFtData,1)
 
     for ii in range(num):
-        FFtData_real[ii,:] = moving_average(FFtData_real[ii,:],10)
-        FFtData_imag[ii,:] = moving_average(FFtData_imag[ii,:],10)
+        FFtData[ii,:] = moving_average(FFtData[ii,:],10)
     for ii in range(size):
-        FFtData_real[:,ii] = moving_average(FFtData_real[:,ii],10)
-        FFtData_imag[:,ii] = moving_average(FFtData_imag[:,ii],10)
+        FFtData[:,ii] = moving_average(FFtData[:,ii],20)
     for ii in range(size):
-        FFtData_real[:,ii] = FFtData_real[:,ii]/max(FFtData_real[:,ii])
-        FFtData_imag[:,ii] = FFtData_imag[:,ii]/max(FFtData_imag[:,ii])
+        FFtData[:,ii] = FFtData[:,ii]/max(FFtData[:,ii])
 
-    return [distance, freq, FFtData_real, FFtData_imag]
+    return [distance, freq, FFtData]
 
-def DenoiseFCdata(velocity, freq, fc_real, fc_imag):
-    num = np.size(fc_real,0)
-    size = np.size(fc_real,1)
-
+def DenoiseFCdata(velocity, freq, fc):
+    num = np.size(fc,0)
+    size = np.size(fc,1)
     for ii in range(num):
-        fc_real[ii,:] = moving_average(fc_real[ii,:],10)
-        fc_imag[ii,:] = moving_average(fc_imag[ii,:],10)
+        fc[ii,:] = fc[ii,:]/max(abs(fc[ii,:]))
     for ii in range(size):
-        fc_real[:,ii] = moving_average(fc_real[:,ii],10)
-        fc_imag[:,ii] = moving_average(fc_imag[:,ii],10)
+        fc[:,ii] = fc[:,ii]/max(abs(fc[:,ii]))
+    for ii in range(num):
+        fc[ii,:] = moving_average(fc[ii,:],15)
+    for ii in range(size):
+        fc[:,ii] = moving_average(fc[:,ii],15)
+    fc = np.maximum(fc, 0)
 
-    fc_real = np.maximum(fc_real, 0)
-    fc_imag = np.maximum(fc_imag, 0)
-
-    return [velocity, freq, fc_real, fc_imag]
+    return [velocity, freq, fc]
 
 
-def Scan(sorted_path):
+def ScanH5(sorted_path):
     h5fileName = sorted_path + 'input.h5'
     velocity = np.linspace(Scan_min_velocity,Scan_max_velocity,Scan_Npoints_velocity)
     saveName = sorted_path + 'freq.npy'
@@ -539,9 +538,10 @@ def Scan(sorted_path):
         FFtData = np.load(saveName)
         FFtData_real = np.real(FFtData)
         FFtData_imag = np.imag(FFtData)
-        [distance, freq, FFtData_real, FFtData_imag] = DenoiseFreqData(distance, freq, FFtData_real, FFtData_imag)
         size = np.size(FFtData,1)
         Num = np.size(FFtData,0)
+        [distance, freq, FFtData_real] = DenoiseFreqData(distance, freq, FFtData_real)
+#        [distance, freq, FFtData_imag] = DenoiseFreqData(distance, freq, FFtData_imag) 
 
         h5file = h5py.File(sorted_path + 'input.h5','w')
         dset = h5file.create_dataset("nr",data=Num,dtype='int')
@@ -567,15 +567,15 @@ def Scan(sorted_path):
 
     fc_real = fc_real.reshape([Scan_Npoints_velocity,int(maxShift/2)])
     fc_imag = fc_imag.reshape([Scan_Npoints_velocity,int(maxShift/2)])
-    [velocity, freq, fc_real, fc_imag] = DenoiseFCdata(velocity, freq, fc_real, fc_imag)
-
+    [velocity, freq, fc_real] = DenoiseFCdata(velocity, freq, fc_real)
+    [velocity, freq, fc_imag] = DenoiseFCdata(velocity, freq, fc_imag)
     fig = plt.figure()
     plt.contourf(freq,velocity,fc_real,cmap = 'jet')
     plt.xlabel('frequency(Hz)')
     plt.ylabel('phase velocity(m/s)')
     fig.show()
     saveName = sorted_path + 'FrequencyDispersionEnergyMap_real.' + save_format
-#    fig.save(saveName,format = save_format)
+    fig.savefig(saveName,format = save_format)
 
     fig = plt.figure()
     plt.contourf(freq,velocity,fc_imag,cmap = 'jet')
@@ -583,8 +583,62 @@ def Scan(sorted_path):
     plt.ylabel('phase velocity(m/s)')
     fig.show()   
     saveName = sorted_path + 'FrequencyDispersionEnergyMap_imag.' + save_format
-#    fig.save(saveName,format = save_format)
+#    fig.savefig(saveName,format = save_format)
 
+def ScanTxt(sorted_path):
+    ScanTxt_exe = config.get('scan','ScanTxt_exe')
+    
+    inputFile = sorted_path + 'fr.txt'
+    velocity = np.linspace(Scan_min_velocity,Scan_max_velocity,Scan_Npoints_velocity)
+    saveName = sorted_path + 'freq.npy'
+    freq = np.load(saveName)
+    if not os.path.exists(inputFile):
+        saveName = sorted_path + 'distance.npy'
+        distance = np.load(saveName)
+        saveName = sorted_path + 'freq_CF.npy'
+        FFtData = np.load(saveName)
+        FFtData_real = np.real(FFtData)
+        FFtData_imag = np.imag(FFtData)
+        size = np.size(FFtData,1)
+        Num = np.size(FFtData,0)
+        [distance, freq, FFtData_real] = DenoiseFreqData(distance, freq, FFtData_real)
+#        [distance, freq, FFtData_imag] = DenoiseFreqData(distance, freq, FFtData_imag) 
+        FFtData_real = np.reshape(FFtData_real,[1,len(freq)*len(distance)])
+        freq = np.reshape(freq,[1,len(freq)])
+        velocity = np.reshape(velocity,[1,len(velocity)])
+        distance = np.reshape(distance,[1,len(distance)])
+        with open(inputFile,'w') as fp:
+            fp.writelines(str(np.size(freq,1)) + ' ' + str(np.size(velocity,1)) + ' ' + str(np.size(distance,1)) + ' ' + '5.8680e-04\n')
+            np.savetxt(fp,freq)
+            np.savetxt(fp,velocity)
+            np.savetxt(fp,distance)
+            np.savetxt(fp,FFtData_real)
+            
+    outputFile = sorted_path + 'fc.txt'
+    if not os.path.exists(outputFile):
+        command = ScanTxt_exe + ' ' + inputFile + ' ' + outputFile
+        os.system(command)
+
+    
+    fc_real = np.loadtxt(outputFile)
+    
+    [velocity, freq, fc_real] = DenoiseFCdata(velocity, freq, fc_real)
+    fc_real = fc_real.T
+    fig = plt.figure()
+    plt.contourf(freq, velocity, fc_real, 50, vmin = 0, cmap = 'jet')
+    plt.colorbar()    
+    plt.xlabel('frequency(Hz)')
+    plt.ylabel('phase velocity(m/s)')
+    fig.show()
+    saveName = sorted_path + 'FrequencyDispersionEnergyMap_real.' + save_format
+    fig.savefig(saveName,format = save_format, dpi = dpi)
+    
+    saveName = sorted_path + 'fcEnergy.txt'
+    np.savetxt(saveName,fc_real)
+    saveName = sorted_path + 'velocity.txt'
+    np.savetxt(saveName,velocity)
+    saveName = sorted_path + 'frequency.txt'
+    np.savetxt(saveName,freq)
 
 if __name__ == '__main__':
     Par_file = "/home/zgh/Seismology/AmbientNoise/HMDVS/Par_file.conf"
@@ -615,6 +669,7 @@ if __name__ == '__main__':
     overlap_part = config.getfloat('crosscorrelation','overlap_part')
     maxShift = int(np.floor(split_hour*3600*samplate_rate))
     StackMethod = config.getint('crosscorrelation','StackMethod')
+    maxStackDay = config.getint('crosscorrelation','maxStackDay')
     SNR_min = config.getfloat('crosscorrelation','SNR_min')
     SNR_window = config.getfloat('crosscorrelation','SNR_window')
     min_surfaceWave = config.getfloat('crosscorrelation','min_surfaceWave')
@@ -669,7 +724,8 @@ if __name__ == '__main__':
         
     if not config.getboolean('scan','scan_done'):        
         sorted_path = projectDir + projectName + '/result/'
-        Scan(sorted_path)
+#        ScanH5(sorted_path)
+        ScanTxt(sorted_path)
 
     if not config.getboolean('pick','pick_done'):
         print('this part will complete in the future')
